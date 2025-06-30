@@ -1,4 +1,9 @@
+[[https://melpa.org/#/gptel-commit][file:https://melpa.org/packages/gptel-commit-badge.svg]]
+[[https://stable.melpa.org/#/gptel-commit][file:https://stable.melpa.org/packages/gptel-commit-badge.svg]]
+
 /AI-powered Git commit message generator for Emacs/
+
+/This README was generated with assistance from Claude Sonnet 4/
 
 ** Features
 
@@ -12,38 +17,23 @@
 
 ** Installation
 
-*** Prerequisites
-
-    Install and configure [[https://github.com/karthink/gptel][gptel]]
-
-    Ensure you have Git installed and accessible from Emacs
-
-*** Using straight.el
-
-#+begin_src elisp
-(straight-use-package '(gptel-commit :type git :host github :repo "lakkiy/gptel-commit"))
-#+end_src
-
-*** Using use-package
+gptel-commit is available on MELPA. After setting up MELPA, you can install it with:
 
 #+begin_src elisp
 (use-package gptel-commit
-  :vc (:url "https://github.com/lakkiy/gptel-commit")
+  :ensure t
   :after (gptel magit)
   :custom
   (gptel-commit-stream t))
 #+end_src
 
-*** Manual Installation
+Or with =M-x package-install RET gptel-commit RET=.
 
-    Clone this repository
+*** Prerequisites
 
-    Add to your load path:
+    Install and configure [[https://github.com/karthink/gptel][gptel]]
 
-#+begin_src elisp
-(add-to-list 'load-path "/path/to/gptel-commit")
-(require 'gptel-commit)
-#+end_src
+    Ensure you have Git installed and accessible from Emacs
 
 ** Usage
 
@@ -79,6 +69,7 @@ When using =gptel-commit-rationale=, you'll be prompted to explain why you're ma
 
 ;; Use a specific backend for commit messages
 ;; (e.g., a cheaper model via OpenRouter)
+;; See https://github.com/karthink/gptel?tab=readme-ov-file#setup for more backend options
 (setq gptel-commit-backend (gptel-make-gh-copilot "Copilot"))
 
 ;; Exclude files from diff analysis (default patterns shown)
@@ -86,6 +77,28 @@ When using =gptel-commit-rationale=, you'll be prompted to explain why you're ma
       '("pnpm-lock.yaml"
         "*.lock"
         "ent/**/*.go"))
+
+;; Customize the prompt used for generating commit messages
+;; Example using Zed editor's commit message prompt style:
+;; https://github.com/zed-industries/zed/blob/main/crates/git_ui/src/commit_message_prompt.txt
+(setq gptel-commit-prompt
+      "You are an expert at writing Git commits. Your job is to write a short clear commit message that summarizes the changes.
+
+If you can accurately express the change in just the subject line, don't include anything in the message body. Only use the body when it is providing *useful* information.
+
+Don't repeat information from the subject line in the message body.
+
+Only return the commit message in your response. Do not include any additional meta-commentary about the task. Do not include the raw diff output in the commit message.
+
+Follow good Git style:
+
+- Separate the subject from the body with a blank line
+- Try to limit the subject line to 50 characters
+- Capitalize the subject line
+- Do not end the subject line with any punctuation
+- Use the imperative mood in the subject line
+- Wrap the body at 72 characters
+- Keep the body short and concise (omit it entirely if not useful)")
 #+end_src
 
 *** Hooks
@@ -121,5 +134,3 @@ Contributions are welcome! Please feel free to submit issues and pull requests.
 ** License
 
 GPL-3.0
-
-/This README was generated with assistance from Claude Sonnet 4/

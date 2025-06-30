@@ -4,7 +4,7 @@
 
 ;; Author: Liu Bo
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "27.1") (gptel "0.1.0"))
+;; Package-Requires: ((emacs "27.1") (gptel "0.9.8"))
 ;; Keywords: vc, convenience
 ;; URL: https://github.com/lakkiy/gptel-commit
 

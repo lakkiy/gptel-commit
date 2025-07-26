@@ -1,3 +1,5 @@
+* gptel-commit v0.2.0
+
 [[https://melpa.org/#/gptel-commit][file:https://melpa.org/packages/gptel-commit-badge.svg]]
 [[https://stable.melpa.org/#/gptel-commit][file:https://stable.melpa.org/packages/gptel-commit-badge.svg]]
 
@@ -5,15 +7,30 @@
 
 /This README was generated with assistance from Claude Sonnet 4/
 
+** Changelog v0.2.0
+
+*** New Features
+- Added Claude Code CLI support as an alternative backend to GPTel
+- Added debug logging functionality for troubleshooting
+- Both streaming and non-streaming modes supported for Claude Code
+- Configurable Claude CLI command path
+
+*** Breaking Changes
+None
+
 ** Features
 
-    🤖 Generates commit messages based on staged changes
+    🤖 Generates commit messages based on staged changes using GPTel or Claude Code
 
     💭 Optional rationale input for complex changes
 
-    🔄 Streaming support for real-time generation
+    🔄 Streaming support for real-time generation (both GPTel and Claude Code)
 
     🎯 Smart filtering of lock files and generated code
+
+    🔧 Debug logging for troubleshooting
+
+    ⚙️ Configurable backend selection
 
 ** Installation
 
@@ -31,7 +48,9 @@ Or with =M-x package-install RET gptel-commit RET=.
 
 *** Prerequisites
 
-    Install and configure [[https://github.com/karthink/gptel][gptel]]
+    Install and configure [[https://github.com/karthink/gptel][gptel]] (for GPTel backend)
+
+    Optionally install [[https://docs.anthropic.com/en/docs/claude-code][Claude Code CLI]] (for Claude Code backend)
 
     Ensure you have Git installed and accessible from Emacs
 
@@ -67,7 +86,18 @@ When using =gptel-commit-rationale=, you'll be prompted to explain why you're ma
 ;; Enable/disable streaming (default: t)
 (setq gptel-commit-stream t)
 
-;; Use a specific backend for commit messages
+;; Choose backend: use Claude Code instead of GPTel (default: nil)
+(setq gptel-commit-use-claude-code t)
+
+;; Claude Code command (default: "claude")
+;; Can be absolute path if claude is not in PATH
+(setq gptel-commit-claude-command "/path/to/claude")
+
+;; Enable debug logging for Claude Code backend (default: nil)
+;; For GPTel debugging, use (setq gptel-log-level 'debug) instead
+(setq gptel-commit-claude-debug t)
+
+;; Use a specific GPTel backend for commit messages (when using GPTel)
 ;; (e.g., a cheaper model via OpenRouter)
 ;; See https://github.com/karthink/gptel?tab=readme-ov-file#setup for more backend options
 (setq gptel-commit-backend (gptel-make-gh-copilot "Copilot"))
@@ -111,11 +141,21 @@ Follow good Git style:
 
     Filters out excluded files (lock files, generated code, etc.)
 
-    Sends the diff to your configured LLM with a specialized prompt
+    Sends the diff to your configured backend (GPTel or Claude Code) with a specialized prompt
 
     Formats the response according to conventional Git commit message format
 
     Inserts the message in your commit buffer
+
+*** Debugging
+
+When =gptel-commit-claude-debug= is enabled, Claude Code debug information is logged to the =*gptel-commit-claude-debug*= buffer, including:
+- Backend selection and prompts
+- Claude Code CLI commands and arguments  
+- Raw output and JSON parsing
+- Process status and timing information
+
+For GPTel debugging, use =(setq gptel-log-level 'debug)= to enable gptel's built-in logging.
 
 ** Tips
 

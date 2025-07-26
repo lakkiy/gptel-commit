@@ -3,7 +3,7 @@
 ;; Copyright (C) 2025 Liu Bo
 
 ;; Author: Liu Bo <liubolovelife@gmail.com>
-;; Version: 0.1.1
+;; Version: 0.2.0
 ;; Package-Requires: ((emacs "27.1") (gptel "0.9.8"))
 ;; Keywords: vc, convenience
 ;; URL: https://github.com/lakkiy/gptel-commit
@@ -28,6 +28,7 @@
 ;;; Commentary:
 
 ;; This package provides functions to generate Git commit messages using GPTel.
+;; It also supports Claude Code as an alternative backend.
 ;; It analyzes staged changes and generates appropriate commit messages following
 ;; conventional Git commit formats.
 ;;
@@ -47,9 +48,27 @@
   :group 'vc
   :group 'gptel)
 
+(defcustom gptel-commit-use-claude-code nil
+  "Whether to use Claude Code CLI instead of GPTel for commit message generation."
+  :type 'boolean
+  :group 'gptel-commit)
+
+(defcustom gptel-commit-claude-command "claude"
+  "Command to run Claude Code CLI.
+Can be a command name in PATH or absolute path to the executable."
+  :type 'string
+  :group 'gptel-commit)
+
 (defcustom gptel-commit-stream t
   "Whether to stream commit message generation.
 Set to nil if your backend doesn't support streaming."
+  :type 'boolean
+  :group 'gptel-commit)
+
+(defcustom gptel-commit-claude-debug nil
+  "Enable debug logging for Claude Code backend.
+When enabled, shows Claude CLI commands and responses in *gptel-commit-claude-debug* buffer.
+For GPTel debugging, use `gptel-log-level' instead."
   :type 'boolean
   :group 'gptel-commit)
 
@@ -94,12 +113,13 @@ SIMPLE vs COMPLEX (single file):
   "A prompt adapted from Emacs.")
 
 (defvar gptel-commit-after-insert-hook nil
-  "Hook run when gptel insert commit message.")
+  "Hook run when commit message is inserted (both GPTel and Claude Code).")
 
 (defvar gptel-commit-backend gptel-backend
-  "The backend used for generating commit messages with `gptel-commit`.
+  "The GPTel backend used for generating commit messages when using GPTel.
 This can be set to a lightweight or free model (e.g., via OpenRouter),
-so it won't interfere with your default `gptel` usage for general chat.")
+so it won't interfere with your default `gptel` usage for general chat.
+Only used when `gptel-commit-use-claude-code' is nil.")
 
 (defvar gptel-commit-diff-excludes
   '("pnpm-lock.yaml"
@@ -113,8 +133,23 @@ so it won't interfere with your default `gptel` usage for general chat.")
 (defvar gptel-commit-rationale-buffer "*GPTel Commit Rationale*"
   "Buffer name for entering rationale for commit message generation.")
 
+(defvar gptel-commit-claude-debug-buffer "*gptel-commit-claude-debug*"
+  "Buffer name for Claude Code debug output.")
+
 (defvar gptel-commit--insert-position nil
   "Position where commit message should be inserted.")
+
+(defvar gptel-commit--claude-process nil
+  "Current Claude Code process.")
+
+(defun gptel-commit--claude-debug-log (message &rest args)
+  "Log MESSAGE with ARGS to Claude debug buffer if debug is enabled."
+  (when gptel-commit-claude-debug
+    (with-current-buffer (get-buffer-create gptel-commit-claude-debug-buffer)
+      (goto-char (point-max))
+      (insert (format-time-string "[%Y-%m-%d %H:%M:%S] "))
+      (insert (apply #'format message args))
+      (insert "\n"))))
 
 (defun gptel-commit--wildcard-to-regexp (glob)
   "Convert shell glob GLOB to a regular expression."
@@ -146,6 +181,121 @@ so it won't interfere with your default `gptel` usage for general chat.")
       (and (derived-mode-p 'text-mode 'git-commit-mode) (current-buffer))
       (user-error "No commit message buffer found")))
 
+(defvar gptel-commit--claude-json-buffer ""
+  "Buffer to accumulate partial JSON from Claude Code streaming.")
+
+(defun gptel-commit--claude-process-filter (proc output)
+  "Process filter for Claude Code process PROC with OUTPUT."
+  (gptel-commit--claude-debug-log "Claude raw output: %s" output)
+  (when-let* ((buffer gptel-commit--current-buffer))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (save-excursion
+          (goto-char gptel-commit--insert-position)
+          ;; Parse stream-json format if streaming
+          (if gptel-commit-stream
+              (progn
+                ;; Accumulate output in case JSON is split across chunks
+                (setq gptel-commit--claude-json-buffer
+                      (concat gptel-commit--claude-json-buffer output))
+                (let ((lines (split-string gptel-commit--claude-json-buffer "\n" t)))
+                  ;; Process complete JSON lines
+                  (setq gptel-commit--claude-json-buffer "")
+                  (dolist (line lines)
+                    (when (and (string-prefix-p "{" line)
+                               (string-suffix-p "}" line))
+                      (condition-case err
+                          (let* ((json-data (json-parse-string line :object-type 'plist))
+                                 (type (plist-get json-data :type))
+                                 (content (plist-get json-data :content))
+                                 (result (plist-get json-data :result)))
+                            ;; Handle different message types
+                            (cond
+                             ;; Assistant message with content (real streaming)
+                             ((and (string= type "assistant") content)
+                              (insert content)
+                              (setq gptel-commit--insert-position (point)))
+                             ;; Final result (fallback if no streaming content)
+                             ((and (string= type "result") result)
+                              (insert result)
+                              (setq gptel-commit--insert-position (point)))))
+                        (error (gptel-commit--claude-debug-log "JSON parse error: %s" err))))
+                    ;; Save incomplete JSON line for next chunk
+                    (when (and (string-prefix-p "{" line)
+                               (not (string-suffix-p "}" line)))
+                      (setq gptel-commit--claude-json-buffer line)))))
+            (insert output)
+            (setq gptel-commit--insert-position (point))))))))
+
+(defun gptel-commit--claude-process-sentinel (proc status)
+  "Process sentinel for Claude Code process PROC with STATUS."
+  (gptel-commit--claude-debug-log "Claude process finished with status: %s" status)
+  (setq gptel-commit--claude-process nil)
+  (when (string-match-p "finished\\|exited" status)
+    (run-hooks 'gptel-commit-after-insert-hook)))
+
+(defun gptel-commit--generate-with-claude (prompt)
+  "Generate commit message using Claude Code CLI with PROMPT."
+  (gptel-commit--claude-debug-log "Using Claude Code backend")
+  (let* ((buffer (gptel-commit--find-commit-buffer))
+         (args (list "--print"
+                     "--append-system-prompt" gptel-commit-prompt)))
+
+    (when gptel-commit-stream
+      (setq args (append args (list "--verbose" "--output-format" "stream-json"))))
+
+    (setq args (append args (list prompt)))
+
+    (let ((debug-args (list "--print")))
+      (when gptel-commit-stream
+        (setq debug-args (append debug-args (list "--verbose" "--output-format" "stream-json"))))
+      (setq debug-args (append debug-args (list "--append-system-prompt" "[SYSTEM_PROMPT]" "[USER_PROMPT]")))
+      (gptel-commit--claude-debug-log "Claude command: %s %s"
+                                      gptel-commit-claude-command
+                                      (mapconcat #'identity debug-args " ")))
+
+    (setq gptel-commit--current-buffer buffer)
+    (with-current-buffer buffer
+      (setq gptel-commit--insert-position (point))
+
+      (if gptel-commit-stream
+          (progn
+            (setq gptel-commit--claude-json-buffer "")  ; Reset JSON buffer
+            (setq gptel-commit--claude-process
+                  (make-process
+                   :name "claude-commit"
+                   :buffer nil
+                   :command (cons gptel-commit-claude-command args)
+                   :filter #'gptel-commit--claude-process-filter
+                   :sentinel #'gptel-commit--claude-process-sentinel))
+            (gptel-commit--claude-debug-log "Started streaming Claude process"))
+        ;; Use make-process for non-streaming too for consistency
+        (let ((output-accumulator ""))
+          (setq gptel-commit--claude-process
+                (make-process
+                 :name "claude-commit-sync"
+                 :buffer nil
+                 :command (cons gptel-commit-claude-command args)
+                 :filter (lambda (proc output)
+                           ;; Log raw output and accumulate
+                           (gptel-commit--claude-debug-log "Claude raw output: %s" output)
+                           (setq output-accumulator (concat output-accumulator output)))
+                 :sentinel (lambda (proc status)
+                             (when (string-match-p "finished\\|exited" status)
+                               ;; Remove trailing ANSI escape sequences ^[[?25h^[[?25h if present
+                               (when (string-suffix-p "\x1b[?25h\x1b[?25h" output-accumulator)
+                                 (setq output-accumulator (substring output-accumulator 0 -12)))
+                               (gptel-commit--claude-debug-log "Claude non-streaming result: %s"
+                                                               (if (> (length output-accumulator) 200)
+                                                                   (concat (substring output-accumulator 0 200) "...")
+                                                                 output-accumulator))
+                               (with-current-buffer buffer
+                                 (save-excursion
+                                   (goto-char gptel-commit--insert-position)
+                                   (insert output-accumulator)))
+                               (run-hooks 'gptel-commit-after-insert-hook)))))
+          (gptel-commit--claude-debug-log "Started non-streaming Claude process"))))))
+
 (defun gptel-commit--setup-request-args ()
   "Setup request arguments based on gptel-commit configuration."
   (list :callback #'gptel-commit--handle-response))
@@ -175,20 +325,27 @@ INFO is a plist with additional information."
   "Generate a commit message based on staged changes and optional RATIONALE."
   (let* ((changes (gptel-commit--filtered-diff))
          (prompt (if (and rationale (not (string-empty-p rationale)))
-                     (format "Context: %s\n\nChanges:\n%s" rationale changes)
-                   changes))
-         (gptel-backend gptel-commit-backend)
-         (buffer (gptel-commit--find-commit-buffer)))
-    (setq gptel-commit--current-buffer buffer)
-    (with-current-buffer buffer
-      (setq gptel-commit--insert-position (point))
-      (gptel-request prompt
-        :system gptel-commit-prompt
-        :stream gptel-commit-stream
-        :callback #'gptel-commit--handle-response))))
+                     (format "Why this change was made: %s\n\nCode changes:\n%s" rationale changes)
+                   changes)))
+
+    (if gptel-commit-use-claude-code
+        (gptel-commit--claude-debug-log "Generating commit message with backend: claude-code")
+      (gptel-commit--claude-debug-log "Generating commit message with backend: gptel"))
+
+    (if gptel-commit-use-claude-code
+        (gptel-commit--generate-with-claude prompt)
+      (let* ((gptel-backend gptel-commit-backend)
+             (buffer (gptel-commit--find-commit-buffer)))
+        (setq gptel-commit--current-buffer buffer)
+        (with-current-buffer buffer
+          (setq gptel-commit--insert-position (point))
+          (gptel-request prompt
+            :system gptel-commit-prompt
+            :stream gptel-commit-stream
+            :callback #'gptel-commit--handle-response))))))
 
 (define-derived-mode gptel-commit-rationale-mode text-mode "GPTel-Commit-Rationale"
-  "Mode for entering commit rationale before GPTel generates commit message."
+  "Mode for entering commit rationale before generating commit message."
   (local-set-key (kbd "C-c C-c") #'gptel-commit--submit-rationale)
   (local-set-key (kbd "C-c C-k") #'gptel-commit--cancel-rationale))
 
@@ -206,7 +363,7 @@ INFO is a plist with additional information."
     (goto-char (point-max))))
 
 (defun gptel-commit--submit-rationale ()
-  "Submit the rationale buffer content and proceed with GPTel commit generation."
+  "Submit the rationale buffer content and proceed with commit generation."
   (interactive)
   (let ((rationale (string-trim
                     (buffer-substring-no-properties
@@ -221,20 +378,20 @@ INFO is a plist with additional information."
     (gptel-commit--generate-message rationale)))
 
 (defun gptel-commit--cancel-rationale ()
-  "Cancel rationale input and abort GPTel commit generation."
+  "Cancel rationale input and abort commit generation."
   (interactive)
   (quit-window t)
-  (message "GPTel commit generation canceled."))
+  (message "Commit generation canceled."))
 
 ;;;###autoload
 (defun gptel-commit ()
-  "Generate commit message with gptel."
+  "Generate commit message with configured backend (GPTel or Claude Code)."
   (interactive)
   (gptel-commit--generate-message nil))
 
 ;;;###autoload
 (defun gptel-commit-rationale ()
-  "Prompt user for rationale and generate commit message with GPTel."
+  "Prompt user for rationale and generate commit message with configured backend."
   (interactive)
   (when (or (get-buffer "COMMIT_EDITMSG")
             (derived-mode-p 'text-mode 'git-commit-mode))

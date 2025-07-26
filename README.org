@@ -1,4 +1,4 @@
-* gptel-commit v0.2.0
+* gptel-commit
 
 [[https://melpa.org/#/gptel-commit][file:https://melpa.org/packages/gptel-commit-badge.svg]]
 [[https://stable.melpa.org/#/gptel-commit][file:https://stable.melpa.org/packages/gptel-commit-badge.svg]]
@@ -151,7 +151,7 @@ Follow good Git style:
 
 When =gptel-commit-claude-debug= is enabled, Claude Code debug information is logged to the =*gptel-commit-claude-debug*= buffer, including:
 - Backend selection and prompts
-- Claude Code CLI commands and arguments  
+- Claude Code CLI commands and arguments
 - Raw output and JSON parsing
 - Process status and timing information
 

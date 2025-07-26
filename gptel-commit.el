@@ -76,6 +76,9 @@ For GPTel debugging, use `gptel-log-level' instead."
   "You are an expert at writing Git commit messages.
 Generate **only** the commit message, nothing else.
 
+CRITICAL: OUTPUT PLAIN TEXT ONLY - NO markdown formatting, NO code
+blocks, NO backticks, NO **bold** or *italic*. Just raw text.
+
 DECISION PROCESS:
 1. Count changed files
 2. If 1 file: check if change is simple or complex
@@ -329,7 +332,11 @@ INFO is a plist with additional information."
                    changes)))
 
     (if gptel-commit-use-claude-code
-        (gptel-commit--claude-debug-log "Generating commit message with backend: claude-code")
+        (progn
+          (gptel-commit--claude-debug-log "Generating commit message with backend: claude-code")
+          (gptel-commit--claude-debug-log "Prompt being sent: %s" (if (> (length prompt) 300)
+                                                                      (concat (substring prompt 0 300) "...")
+                                                                    prompt)))
       (gptel-commit--claude-debug-log "Generating commit message with backend: gptel"))
 
     (if gptel-commit-use-claude-code
